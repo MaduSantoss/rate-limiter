@@ -24,15 +24,20 @@ app.Use(async (context, next) =>
 
     var usarSliding = context.Request.Query["algo"] == "sliding";
 
-    var permitido = usarSliding
+    var resultado = usarSliding
         ? await sliding.PermitirAsync(chave)
         : await limiter.PermitirAsync(chave);
 
-    if (!permitido)
+    context.Response.Headers["X-RateLimit-Limit"] = resultado.Limite.ToString();
+    context.Response.Headers["X-RateLimit-Remaining"] = resultado.Restantes.ToString();
+
+    if (!resultado.Permitido)
     {
+        context.Response.Headers["Retry-After"] = resultado.EsperarSegundos.ToString();
+
         context.Response.StatusCode = 429;
         context.Response.ContentType = "text/plain; charset=utf-8";
-        await context.Response.WriteAsync($"[{chave}] Muitas requisições. Tente mais tarde.\n");
+        await context.Response.WriteAsync($"[{chave}] Muitas requisições. Tente em {resultado.EsperarSegundos}s.\n");
         return;
     }
 

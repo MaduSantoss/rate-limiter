@@ -12,12 +12,11 @@ public class RedisTokenBucket
         local balasPorSegundo = tonumber(ARGV[2])
         local agora = tonumber(ARGV[3])
 
-        -- 1. LER o potinho
+        -- 1. LER
         local dados = redis.call('HMGET', chave, 'fichas', 'ultimaOlhada')
         local fichas = tonumber(dados[1])
         local ultimaOlhada = tonumber(dados[2])
 
-        -- Se não existir, começa cheio
         if fichas == nil then
             fichas = capacidade
             ultimaOlhada = agora
@@ -29,16 +28,21 @@ public class RedisTokenBucket
 
         -- 3. DECIDIR
         local permitido = 0
+        local esperar = 0
         if fichas >= 1 then
             fichas = fichas - 1
             permitido = 1
+        else
+            -- quanto falta para cair 1 bala inteira (arredondado para cima)
+            esperar = math.ceil((1 - fichas) / balasPorSegundo)
         end
 
         -- 4. GRAVAR
         redis.call('HSET', chave, 'fichas', tostring(fichas), 'ultimaOlhada', tostring(agora))
         redis.call('EXPIRE', chave, 60)
 
-        return permitido
+        -- Devolve a ficha: permitido, restantes, esperar
+        return { permitido, math.floor(fichas), esperar }
     ";
 
     public RedisTokenBucket(IDatabase db, double capacidade, double balasPorSegundo)
@@ -48,16 +52,20 @@ public class RedisTokenBucket
         this.balasPorSegundo = balasPorSegundo;
     }
 
-    public async Task<bool> PermitirAsync(string cliente)
+    public async Task<Resultado> PermitirAsync(string cliente)
     {
         var chave = $"balde:{cliente}";
         var agora = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        var resultado = await db.ScriptEvaluateAsync(
+        var resposta = (RedisResult[])(await db.ScriptEvaluateAsync(
             Script,
             new RedisKey[] { chave },
-            new RedisValue[] { capacidade, balasPorSegundo, agora });
+            new RedisValue[] { capacidade, balasPorSegundo, agora }))!;
 
-        return (int)resultado == 1;
+        return new Resultado(
+            Permitido: (int)resposta[0] == 1,
+            Limite: (int)capacidade,
+            Restantes: (int)resposta[1],
+            EsperarSegundos: (int)resposta[2]);
     }
 }

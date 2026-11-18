@@ -3,7 +3,7 @@ using StackExchange.Redis;
 public class RedisSlidingWindow
 {
     private readonly IDatabase db;
-    private readonly int limite;     
+    private readonly int limite;
     private readonly long janelaMs;
 
     private const string Script = @"
@@ -13,21 +13,26 @@ public class RedisSlidingWindow
         local agora = tonumber(ARGV[3])
         local idVisita = ARGV[4]
 
-        -- 1. APAGAR as visitas velhas (de antes do começo da janela)
+        -- 1. APAGAR as visitas velhas
         redis.call('ZREMRANGEBYSCORE', chave, 0, agora - janelaMs)
 
-        -- 2. CONTAR as que sobraram
+        -- 2. CONTAR
         local total = redis.call('ZCARD', chave)
 
         -- 3. DECIDIR
         if total < limite then
-            -- 4. ANOTAR a nova visita
+            -- 4. ANOTAR
             redis.call('ZADD', chave, agora, idVisita)
             redis.call('PEXPIRE', chave, janelaMs)
-            return 1
+            return { 1, limite - total - 1, 0 }
         end
 
-        return 0
+        -- Cheio: quando a visita mais antiga sai da janela?
+        local maisAntiga = redis.call('ZRANGE', chave, 0, 0, 'WITHSCORES')
+        local horaMaisAntiga = tonumber(maisAntiga[2])
+        local esperarMs = horaMaisAntiga + janelaMs - agora
+
+        return { 0, 0, math.ceil(esperarMs / 1000) }
     ";
 
     public RedisSlidingWindow(IDatabase db, int limite, TimeSpan janela)
@@ -37,17 +42,21 @@ public class RedisSlidingWindow
         janelaMs = (long)janela.TotalMilliseconds;
     }
 
-    public async Task<bool> PermitirAsync(string cliente)
+    public async Task<Resultado> PermitirAsync(string cliente)
     {
         var chave = $"janela:{cliente}";
         var agora = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var idVisita = Guid.NewGuid().ToString();
 
-        var resultado = await db.ScriptEvaluateAsync(
+        var resposta = (RedisResult[])(await db.ScriptEvaluateAsync(
             Script,
             new RedisKey[] { chave },
-            new RedisValue[] { limite, janelaMs, agora, idVisita });
+            new RedisValue[] { limite, janelaMs, agora, idVisita }))!;
 
-        return (int)resultado == 1;
+        return new Resultado(
+            Permitido: (int)resposta[0] == 1,
+            Limite: limite,
+            Restantes: (int)resposta[1],
+            EsperarSegundos: (int)resposta[2]);
     }
 }
