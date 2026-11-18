@@ -5,13 +5,17 @@ public static class RateLimitMiddleware
         RedisTokenBucket tokenBucket,
         RedisSlidingWindow slidingWindow)
     {
+        var modoTeste = app.Environment.IsDevelopment();
+
         app.Use(async (context, next) =>
         {
-            var ip = context.Connection.RemoteIpAddress?.ToString() ?? "desconhecido";
-            var nome = context.Request.Query["cliente"].ToString();
-            var chave = string.IsNullOrEmpty(nome) ? ip : nome;
+            var chave = context.Connection.RemoteIpAddress?.ToString() ?? "desconhecido";
 
-            var usarSliding = context.Request.Query["algo"] == "sliding";
+            var nome = context.Request.Query["cliente"].ToString();
+            if (modoTeste && !string.IsNullOrEmpty(nome))
+                chave = nome;
+
+            var usarSliding = modoTeste && context.Request.Query["algo"] == "sliding";
 
             var resultado = usarSliding
                 ? await slidingWindow.PermitirAsync(chave)
@@ -25,7 +29,7 @@ public static class RateLimitMiddleware
                 context.Response.Headers["Retry-After"] = resultado.EsperarSegundos.ToString();
                 context.Response.StatusCode = 429;
                 context.Response.ContentType = "text/plain; charset=utf-8";
-                await context.Response.WriteAsync($"[{chave}] Muitas requisições. Tente em {resultado.EsperarSegundos}s.\n");
+                await context.Response.WriteAsync("Muitas requisições. Tente em " + resultado.EsperarSegundos + "s.\n");
                 return;
             }
 
