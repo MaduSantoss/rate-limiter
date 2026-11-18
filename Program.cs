@@ -3,7 +3,7 @@ using StackExchange.Redis;
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-var redis = ConnectionMultiplexer.Connect("localhost:6379");
+var redis = ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!);
 var db = redis.GetDatabase();
 
 var tokenBucket = new RedisTokenBucket(db, capacidade: 5, balasPorSegundo: 1);
